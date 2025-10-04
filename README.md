@@ -47,11 +47,14 @@ go build -o shode ./cmd/shode
 ### Basic Usage
 
 ```bash
-# Run a shell script file
+# Run a shell script file (with full execution engine)
 ./shode run examples/test.sh
 
 # Execute an inline command
 ./shode exec "echo hello world"
+
+# Execute with pipeline
+./shode exec "cat file.txt | grep pattern | wc -l"
 
 # Start interactive REPL session
 ./shode repl
@@ -69,15 +72,21 @@ go build -o shode ./cmd/shode
 # Initialize a new package
 ./shode pkg init my-project 1.0.0
 
-# Add dependencies
+# Search for packages in registry
+./shode pkg search lodash
+
+# Add dependencies (installs from registry)
 ./shode pkg add lodash 4.17.21
 ./shode pkg add --dev jest 29.7.0
 
-# Install dependencies
+# Install all dependencies from registry
 ./shode pkg install
 
 # List dependencies
 ./shode pkg list
+
+# Publish package to registry
+./shode pkg publish
 
 # Manage scripts
 ./shode pkg script test "echo 'Running tests...'"
@@ -142,7 +151,7 @@ shode/
 
 ## 🔧 Development Status
 
-**Current Version**: 0.1.0 (Production Ready)
+**Current Version**: 0.2.0 (Production Ready with Enhanced Features)
 
 ### ✅ Completed Features
 
@@ -151,6 +160,24 @@ shode/
 - CLI framework with multiple commands
 - Advanced shell command parser
 - Complete AST structure implementation
+
+#### Execution Engine (NEW in v0.2.0)
+- **Pipeline Support**: True data flow between commands
+- **Redirection**: Input/output redirection (>, >>, <, 2>&1, &>)
+- **Control Flow**: if-then-else, for loops, while loops
+- **Variable Assignment**: Environment variable management
+- **Command Caching**: Performance optimization with TTL-based cache
+- **Process Pooling**: Reusable process pool for repeated commands
+- **Three Execution Modes**: Interpreted, Process, and Hybrid
+
+#### Package Registry (NEW in v0.2.0)
+- **Registry Client**: Complete client for package operations
+- **Registry Server**: Local/remote registry server
+- **Package Search**: Full-text search with keyword filtering
+- **Package Publishing**: Publish packages with authentication
+- **Package Installation**: Download and install from remote registry
+- **Caching**: Intelligent caching with 24-hour TTL
+- **Checksum Verification**: SHA256 verification for security
 
 #### User Experience
 - File system operations (ReadFile, WriteFile, ListFiles, FileExists)
@@ -164,13 +191,17 @@ shode/
 - Sensitive file protection (/etc/passwd, /root/, /boot/, etc.)
 - Pattern matching detection (recursive delete, password leaks, shell injection)
 - Dynamic rule management and security reporting
+- Command-level security checks in execution engine
 
 #### Package Management
 - shode.json configuration management
 - Dependency and devDependency support
 - Script definition and execution
-- Package installation simulation
+- Remote package installation from registry
+- Local package fallback
 - sh_models directory structure
+- Package search command
+- Package publish command
 
 #### Module System
 - Module loading and resolution
@@ -191,12 +222,14 @@ MIT License - see LICENSE file for details
 
 ## 🤝 Contributing
 
-This project is now production-ready! Contributions and feedback are welcome for:
-- Execution engine implementation
-- Enhanced security features
+This project is production-ready with advanced features! Contributions and feedback are welcome for:
+- Enhanced security features and monitoring
 - Additional standard library functions
-- IDE plugin development
-- Community package repository
+- IDE plugin development (VSCode, IntelliJ, etc.)
+- Package signing and verification
+- Cloud-native deployment tools
+- Performance optimizations
+- Documentation and tutorials
 
 ## 🎯 Roadmap
 
@@ -206,12 +239,18 @@ This project is now production-ready! Contributions and feedback are welcome for
 - ✅ Phase 3: Ecosystem & Extensions
 - ✅ Phase 4: Tools & Integration
 
+### Latest Enhancements (v0.2.0)
+- ✅ **Complete Execution Engine**: Full pipeline, redirection, and control flow support
+- ✅ **Package Registry**: Complete package repository with search and publish
+- ✅ **Remote Package Management**: Download and install packages from registry
+- ✅ **Enhanced Performance**: Command caching and process pooling
+
 ### Future Enhancements
-- **Execution Engine**: Complete command execution integration
 - **Enhanced Security**: Real-time security monitoring and policy enforcement
 - **Cloud Integration**: Cloud-native deployment and management
 - **AI Assistance**: AI-powered script generation and optimization
-- **Community Ecosystem**: Public package repository and community contributions
+- **Package Signing**: Cryptographic verification for packages
+- **IDE Integration**: VSCode and other IDE plugins
 
 ## 🌟 Why Shode?
 

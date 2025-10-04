@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -104,33 +105,69 @@ func (ee *ExecutionEngine) Execute(ctx context.Context, script *types.ScriptNode
 			}
 
 		case *types.PipeNode:
-			// For now, treat PipeNode as a simple command sequence
-			// TODO: Implement proper pipeline execution
-			leftResult, err := ee.ExecuteCommand(ctx, n.Left.(*types.CommandNode))
+			// Execute pipeline
+			pipeResult, err := ee.ExecutePipeline(ctx, n)
 			if err != nil {
 				return nil, err
 			}
-			result.Commands = append(result.Commands, leftResult)
+			result.Commands = append(result.Commands, pipeResult.Results...)
 			
-			if !leftResult.Success {
+			if !pipeResult.Success {
 				result.Success = false
-				result.ExitCode = leftResult.ExitCode
+				result.ExitCode = pipeResult.ExitCode
 				break
 			}
 
-			rightResult, err := ee.ExecuteCommand(ctx, n.Right.(*types.CommandNode))
+		case *types.IfNode:
+			// Execute if-then-else
+			ifResult, err := ee.ExecuteIf(ctx, n)
 			if err != nil {
 				return nil, err
 			}
-			result.Commands = append(result.Commands, rightResult)
+			result.Commands = append(result.Commands, ifResult.Commands...)
 			
-			if !rightResult.Success {
+			if !ifResult.Success {
 				result.Success = false
-				result.ExitCode = rightResult.ExitCode
+				result.ExitCode = ifResult.ExitCode
 				break
 			}
 
-		// TODO: Add support for other node types (if, for, while, etc.)
+		case *types.ForNode:
+			// Execute for loop
+			forResult, err := ee.ExecuteFor(ctx, n)
+			if err != nil {
+				return nil, err
+			}
+			result.Commands = append(result.Commands, forResult.Commands...)
+			
+			if !forResult.Success {
+				result.Success = false
+				result.ExitCode = forResult.ExitCode
+				break
+			}
+
+		case *types.WhileNode:
+			// Execute while loop
+			whileResult, err := ee.ExecuteWhile(ctx, n)
+			if err != nil {
+				return nil, err
+			}
+			result.Commands = append(result.Commands, whileResult.Commands...)
+			
+			if !whileResult.Success {
+				result.Success = false
+				result.ExitCode = whileResult.ExitCode
+				break
+			}
+
+		case *types.AssignmentNode:
+			// Execute variable assignment
+			ee.envManager.SetEnv(n.Name, n.Value)
+
+		case *types.FunctionNode:
+			// Store function definition (not executing it)
+			// TODO: Implement function storage and execution
+			
 		default:
 			return nil, fmt.Errorf("unsupported node type: %T", n)
 		}
@@ -182,39 +219,157 @@ func (ee *ExecutionEngine) ExecuteCommand(ctx context.Context, cmd *types.Comman
 	return result, nil
 }
 
-// ExecutePipeline executes a pipeline of commands (placeholder)
+// ExecutePipeline executes a pipeline of commands with proper data flow
 func (ee *ExecutionEngine) ExecutePipeline(ctx context.Context, pipeline *types.PipeNode) (*PipelineResult, error) {
-	// For now, treat pipeline as sequential execution
-	// TODO: Implement proper pipeline with stream processing
+	// Collect all commands in the pipeline
+	commands := ee.collectPipelineCommands(pipeline)
+	results := make([]*CommandResult, 0, len(commands))
 	
-	// Execute left command
-	leftResult, err := ee.ExecuteCommand(ctx, pipeline.Left.(*types.CommandNode))
-	if err != nil {
-		return nil, err
+	// Execute commands with piped data flow
+	var previousOutput string
+	for i, cmd := range commands {
+		var result *CommandResult
+		var err error
+		
+		if i == 0 {
+			// First command - execute normally
+			result, err = ee.ExecuteCommand(ctx, cmd)
+		} else {
+			// Subsequent commands - use previous output as input
+			result, err = ee.ExecuteCommandWithInput(ctx, cmd, previousOutput)
+		}
+		
+		if err != nil {
+			return nil, err
+		}
+		
+		results = append(results, result)
+		
+		// If command failed, stop pipeline
+		if !result.Success {
+			return &PipelineResult{
+				Success:  false,
+				ExitCode: result.ExitCode,
+				Output:   result.Output,
+				Error:    result.Error,
+				Results:  results,
+			}, nil
+		}
+		
+		// Store output for next command
+		previousOutput = result.Output
 	}
-
-	// Execute right command
-	rightResult, err := ee.ExecuteCommand(ctx, pipeline.Right.(*types.CommandNode))
-	if err != nil {
-		return nil, err
-	}
-
-	results := []*CommandResult{leftResult, rightResult}
-	success := leftResult.Success && rightResult.Success
-	exitCode := 0
-	if !success {
-		exitCode = 1
-	}
-
-	// Combine output (simple concatenation for now)
-	output := leftResult.Output + rightResult.Output
-
+	
+	// Return final result
+	lastResult := results[len(results)-1]
 	return &PipelineResult{
-		Success:  success,
-		ExitCode: exitCode,
-		Output:   output,
+		Success:  true,
+		ExitCode: 0,
+		Output:   lastResult.Output,
 		Error:    "",
 		Results:  results,
+	}, nil
+}
+
+// collectPipelineCommands collects all commands from a pipeline tree
+func (ee *ExecutionEngine) collectPipelineCommands(node types.Node) []*types.CommandNode {
+	var commands []*types.CommandNode
+	
+	switch n := node.(type) {
+	case *types.PipeNode:
+		// Recursively collect left commands
+		commands = append(commands, ee.collectPipelineCommands(n.Left)...)
+		// Recursively collect right commands
+		commands = append(commands, ee.collectPipelineCommands(n.Right)...)
+	case *types.CommandNode:
+		commands = append(commands, n)
+	}
+	
+	return commands
+}
+
+// ExecuteCommandWithInput executes a command with input data
+func (ee *ExecutionEngine) ExecuteCommandWithInput(ctx context.Context, cmd *types.CommandNode, input string) (*CommandResult, error) {
+	startTime := time.Now()
+	
+	// Security check
+	if err := ee.security.CheckCommand(cmd); err != nil {
+		return &CommandResult{
+			Command:  cmd,
+			Success:  false,
+			ExitCode: 1,
+			Error:    fmt.Sprintf("Security violation: %v", err),
+			Duration: time.Since(startTime),
+		}, nil
+	}
+	
+	// Execute process with input
+	result, err := ee.executeProcessWithInput(ctx, cmd, input)
+	if err != nil {
+		return nil, err
+	}
+	
+	result.Duration = time.Since(startTime)
+	result.Mode = ModeProcess
+	return result, nil
+}
+
+// executeProcessWithInput executes a command with stdin input
+func (ee *ExecutionEngine) executeProcessWithInput(ctx context.Context, cmd *types.CommandNode, input string) (*CommandResult, error) {
+	// Create command with context
+	command := exec.CommandContext(ctx, cmd.Name, cmd.Args...)
+	
+	// Set environment
+	envVars := make([]string, 0, len(ee.envManager.GetAllEnv()))
+	for key, value := range ee.envManager.GetAllEnv() {
+		envVars = append(envVars, key+"="+value)
+	}
+	command.Env = envVars
+	command.Dir = ee.envManager.GetWorkingDir()
+	
+	// Set up pipes
+	stdin, err := command.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stdin pipe: %v", err)
+	}
+	
+	var stdout, stderr strings.Builder
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	
+	// Start command
+	if err := command.Start(); err != nil {
+		return &CommandResult{
+			Command:  cmd,
+			Success:  false,
+			ExitCode: 1,
+			Error:    err.Error(),
+		}, nil
+	}
+	
+	// Write input to stdin
+	if _, err := stdin.Write([]byte(input)); err != nil {
+		return nil, fmt.Errorf("failed to write to stdin: %v", err)
+	}
+	stdin.Close()
+	
+	// Wait for command to complete
+	err = command.Wait()
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = 1
+		}
+	}
+	
+	return &CommandResult{
+		Command:  cmd,
+		Success:  err == nil,
+		ExitCode: exitCode,
+		Output:   stdout.String(),
+		Error:    stderr.String(),
 	}, nil
 }
 
@@ -400,9 +555,11 @@ func (ee *ExecutionEngine) executeStdLibFunction(funcName string, args []string)
 
 // executeProcess executes a command as an external process
 func (ee *ExecutionEngine) executeProcess(ctx context.Context, cmd *types.CommandNode) (*CommandResult, error) {
-	// Check cache first
-	if cached, ok := ee.cache.Get(cmd.Name, cmd.Args); ok {
-		return cached, nil
+	// Check cache first (only if no redirects)
+	if cmd.Redirect == nil {
+		if cached, ok := ee.cache.Get(cmd.Name, cmd.Args); ok {
+			return cached, nil
+		}
 	}
 
 	// Create command with context
@@ -418,10 +575,22 @@ func (ee *ExecutionEngine) executeProcess(ctx context.Context, cmd *types.Comman
 	// Set working directory
 	command.Dir = ee.envManager.GetWorkingDir()
 
-	// Capture output
+	// Handle redirections
 	var stdout, stderr strings.Builder
-	command.Stdout = &stdout
-	command.Stderr = &stderr
+	if cmd.Redirect != nil {
+		if err := ee.setupRedirect(command, cmd.Redirect, &stdout, &stderr); err != nil {
+			return &CommandResult{
+				Command:  cmd,
+				Success:  false,
+				ExitCode: 1,
+				Error:    fmt.Sprintf("redirect error: %v", err),
+			}, nil
+		}
+	} else {
+		// No redirect - capture output
+		command.Stdout = &stdout
+		command.Stderr = &stderr
+	}
 
 	// Execute command
 	startTime := time.Now()
@@ -447,12 +616,68 @@ func (ee *ExecutionEngine) executeProcess(ctx context.Context, cmd *types.Comman
 		Duration: duration,
 	}
 
-	// Cache successful results
-	if err == nil {
+	// Cache successful results (only if no redirects)
+	if err == nil && cmd.Redirect == nil {
 		ee.cache.Put(cmd.Name, cmd.Args, result)
 	}
 
 	return result, nil
+}
+
+// setupRedirect sets up input/output redirection for a command
+func (ee *ExecutionEngine) setupRedirect(cmd *exec.Cmd, redirect *types.RedirectNode, stdout, stderr *strings.Builder) error {
+	switch redirect.Op {
+	case ">": // Output redirection (overwrite)
+		file, err := os.Create(redirect.File)
+		if err != nil {
+			return fmt.Errorf("failed to create file %s: %v", redirect.File, err)
+		}
+		defer file.Close()
+		
+		if redirect.Fd == 1 || redirect.Fd == 0 { // stdout
+			cmd.Stdout = file
+		} else if redirect.Fd == 2 { // stderr
+			cmd.Stderr = file
+		}
+		
+	case ">>": // Output redirection (append)
+		file, err := os.OpenFile(redirect.File, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			return fmt.Errorf("failed to open file %s: %v", redirect.File, err)
+		}
+		defer file.Close()
+		
+		if redirect.Fd == 1 || redirect.Fd == 0 {
+			cmd.Stdout = file
+		} else if redirect.Fd == 2 {
+			cmd.Stderr = file
+		}
+		
+	case "<": // Input redirection
+		file, err := os.Open(redirect.File)
+		if err != nil {
+			return fmt.Errorf("failed to open file %s: %v", redirect.File, err)
+		}
+		defer file.Close()
+		cmd.Stdin = file
+		
+	case "2>&1": // Redirect stderr to stdout
+		cmd.Stderr = cmd.Stdout
+		
+	case "&>": // Redirect both stdout and stderr to file
+		file, err := os.Create(redirect.File)
+		if err != nil {
+			return fmt.Errorf("failed to create file %s: %v", redirect.File, err)
+		}
+		defer file.Close()
+		cmd.Stdout = file
+		cmd.Stderr = file
+		
+	default:
+		return fmt.Errorf("unsupported redirect operator: %s", redirect.Op)
+	}
+	
+	return nil
 }
 
 // executeHybrid executes a command using hybrid approach (future enhancement)
@@ -466,6 +691,125 @@ func (ee *ExecutionEngine) executeHybrid(ctx context.Context, cmd *types.Command
 func (ee *ExecutionEngine) isExternalCommandAvailable(cmd string) bool {
 	_, err := exec.LookPath(cmd)
 	return err == nil
+}
+
+// ExecuteIf executes an if-then-else statement
+func (ee *ExecutionEngine) ExecuteIf(ctx context.Context, ifNode *types.IfNode) (*ExecutionResult, error) {
+	// Evaluate condition
+	conditionResult, err := ee.evaluateCondition(ctx, ifNode.Condition)
+	if err != nil {
+		return nil, err
+	}
+	
+	// Execute appropriate branch
+	if conditionResult {
+		return ee.Execute(ctx, ifNode.Then)
+	} else if ifNode.Else != nil {
+		return ee.Execute(ctx, ifNode.Else)
+	}
+	
+	// No else branch and condition was false
+	return &ExecutionResult{
+		Success:  true,
+		ExitCode: 0,
+		Commands: []*CommandResult{},
+	}, nil
+}
+
+// ExecuteFor executes a for loop
+func (ee *ExecutionEngine) ExecuteFor(ctx context.Context, forNode *types.ForNode) (*ExecutionResult, error) {
+	result := &ExecutionResult{
+		Commands: make([]*CommandResult, 0),
+	}
+	
+	// Iterate over the list
+	for _, item := range forNode.List {
+		// Set loop variable
+		ee.envManager.SetEnv(forNode.Variable, item)
+		
+		// Execute loop body
+		loopResult, err := ee.Execute(ctx, forNode.Body)
+		if err != nil {
+			return nil, err
+		}
+		
+		result.Commands = append(result.Commands, loopResult.Commands...)
+		
+		// Check for break/continue (TODO: implement break/continue support)
+		if !loopResult.Success {
+			result.Success = false
+			result.ExitCode = loopResult.ExitCode
+			return result, nil
+		}
+	}
+	
+	result.Success = true
+	result.ExitCode = 0
+	return result, nil
+}
+
+// ExecuteWhile executes a while loop
+func (ee *ExecutionEngine) ExecuteWhile(ctx context.Context, whileNode *types.WhileNode) (*ExecutionResult, error) {
+	result := &ExecutionResult{
+		Commands: make([]*CommandResult, 0),
+	}
+	
+	maxIterations := 10000 // Safety limit to prevent infinite loops
+	iterations := 0
+	
+	for {
+		// Check iteration limit
+		if iterations >= maxIterations {
+			return nil, fmt.Errorf("while loop exceeded maximum iterations (%d)", maxIterations)
+		}
+		iterations++
+		
+		// Evaluate condition
+		conditionResult, err := ee.evaluateCondition(ctx, whileNode.Condition)
+		if err != nil {
+			return nil, err
+		}
+		
+		// Exit loop if condition is false
+		if !conditionResult {
+			break
+		}
+		
+		// Execute loop body
+		loopResult, err := ee.Execute(ctx, whileNode.Body)
+		if err != nil {
+			return nil, err
+		}
+		
+		result.Commands = append(result.Commands, loopResult.Commands...)
+		
+		// Check for errors
+		if !loopResult.Success {
+			result.Success = false
+			result.ExitCode = loopResult.ExitCode
+			return result, nil
+		}
+	}
+	
+	result.Success = true
+	result.ExitCode = 0
+	return result, nil
+}
+
+// evaluateCondition evaluates a condition node and returns true/false
+func (ee *ExecutionEngine) evaluateCondition(ctx context.Context, condition types.Node) (bool, error) {
+	switch n := condition.(type) {
+	case *types.CommandNode:
+		// Execute command and check exit code
+		cmdResult, err := ee.ExecuteCommand(ctx, n)
+		if err != nil {
+			return false, err
+		}
+		return cmdResult.Success && cmdResult.ExitCode == 0, nil
+		
+	default:
+		return false, fmt.Errorf("unsupported condition node type: %T", n)
+	}
 }
 
 // Helper function to convert error to string

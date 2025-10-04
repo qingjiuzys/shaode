@@ -8,13 +8,15 @@ import (
 	"path/filepath"
 
 	"gitee.com/com_818cloud/shode/pkg/environment"
+	"gitee.com/com_818cloud/shode/pkg/registry"
 )
 
 // PackageManager manages Shode package dependencies
 type PackageManager struct {
-	envManager *environment.EnvironmentManager
-	config     *PackageConfig
-	configPath string
+	envManager     *environment.EnvironmentManager
+	config         *PackageConfig
+	configPath     string
+	registryClient *registry.Client
 }
 
 // PackageConfig represents the shode.json configuration
@@ -39,9 +41,13 @@ type PackageInfo struct {
 
 // NewPackageManager creates a new package manager
 func NewPackageManager() *PackageManager {
+	// Initialize registry client with default config
+	registryClient, _ := registry.NewClient(nil)
+	
 	return &PackageManager{
-		envManager: environment.NewEnvironmentManager(),
-		config:     &PackageConfig{},
+		envManager:     environment.NewEnvironmentManager(),
+		config:         &PackageConfig{},
+		registryClient: registryClient,
 	}
 }
 
@@ -186,12 +192,32 @@ func (pm *PackageManager) Install() error {
 
 	for name, version := range allDeps {
 		fmt.Printf("Installing %s@%s\n", name, version)
-		if err := pm.installPackage(name, version); err != nil {
-			return fmt.Errorf("failed to install %s: %v", name, err)
+		if err := pm.installPackageFromRegistry(name, version, shModelsPath); err != nil {
+			// Fallback to local installation if registry fails
+			fmt.Printf("  Registry installation failed, using local fallback...\n")
+			if err := pm.installPackage(name, version); err != nil {
+				return fmt.Errorf("failed to install %s: %v", name, err)
+			}
 		}
 	}
 
 	fmt.Println("All dependencies installed successfully!")
+	return nil
+}
+
+// installPackageFromRegistry installs a package from the remote registry
+func (pm *PackageManager) installPackageFromRegistry(name, version, targetDir string) error {
+	// Try to install from registry
+	if pm.registryClient == nil {
+		return fmt.Errorf("registry client not initialized")
+	}
+
+	// Install package using registry client
+	if err := pm.registryClient.Install(name, version, targetDir); err != nil {
+		return err
+	}
+
+	fmt.Printf("  Installed %s@%s from registry\n", name, version)
 	return nil
 }
 
@@ -279,4 +305,64 @@ func (pm *PackageManager) GetConfig() *PackageConfig {
 // GetConfigPath returns the path to the config file
 func (pm *PackageManager) GetConfigPath() string {
 	return pm.configPath
+}
+
+// Search searches for packages in the registry
+func (pm *PackageManager) Search(query string) ([]*registry.SearchResult, error) {
+	if pm.registryClient == nil {
+		return nil, fmt.Errorf("registry client not initialized")
+	}
+
+	searchQuery := &registry.SearchQuery{
+		Query: query,
+		Limit: 20,
+	}
+
+	return pm.registryClient.Search(searchQuery)
+}
+
+// Publish publishes the current package to the registry
+func (pm *PackageManager) Publish() error {
+	if err := pm.LoadConfig(); err != nil {
+		return err
+	}
+
+	// Create package data
+	pkg := &registry.Package{
+		Name:        pm.config.Name,
+		Version:     pm.config.Version,
+		Description: pm.config.Description,
+		Scripts:     pm.config.Scripts,
+		Dependencies: pm.config.Dependencies,
+		DevDependencies: pm.config.DevDependencies,
+		Main:        "index.sh",
+	}
+
+	// TODO: Create tarball from package files
+	// For now, use placeholder
+	tarballData := []byte("placeholder tarball")
+	checksum := calculateChecksum(tarballData)
+
+	req := &registry.PublishRequest{
+		Package:  pkg,
+		Tarball:  tarballData,
+		Checksum: checksum,
+	}
+
+	return pm.registryClient.Publish(req)
+}
+
+// GetRegistryClient returns the registry client
+func (pm *PackageManager) GetRegistryClient() *registry.Client {
+	return pm.registryClient
+}
+
+// calculateChecksum is a helper function (duplicated from registry package)
+func calculateChecksum(data []byte) string {
+	// Use a simple checksum for now
+	sum := 0
+	for _, b := range data {
+		sum += int(b)
+	}
+	return fmt.Sprintf("%x", sum)
 }
