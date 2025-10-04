@@ -1,9 +1,16 @@
 package commands
 
 import (
+	"context"
 	"fmt"
+	"time"
 
+	"gitee.com/com_818cloud/shode/pkg/engine"
+	"gitee.com/com_818cloud/shode/pkg/environment"
+	"gitee.com/com_818cloud/shode/pkg/module"
 	"gitee.com/com_818cloud/shode/pkg/parser"
+	"gitee.com/com_818cloud/shode/pkg/sandbox"
+	"gitee.com/com_818cloud/shode/pkg/stdlib"
 	"github.com/spf13/cobra"
 )
 
@@ -33,12 +40,42 @@ The command will be parsed, analyzed for security risks, and executed in a sandb
 				return fmt.Errorf("failed to parse command: %v", err)
 			}
 			
-			if len(script.Nodes) > 0 {
-				fmt.Printf("Parsed command successfully\n")
-				fmt.Println("(Shode execution engine will execute the command here)")
+			if len(script.Nodes) == 0 {
+				return fmt.Errorf("no command to execute")
 			}
 			
-			// TODO: Implement execution engine and security checks
+			// Initialize execution engine components
+			envManager := environment.NewEnvironmentManager()
+			stdLib := stdlib.New()
+			moduleMgr := module.NewModuleManager()
+			security := sandbox.NewSecurityChecker()
+			
+			// Create execution engine
+			executionEngine := engine.NewExecutionEngine(envManager, stdLib, moduleMgr, security)
+			
+			// Execute the command with timeout
+			ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
+			defer cancel()
+			
+			result, err := executionEngine.Execute(ctx, script)
+			if err != nil {
+				return fmt.Errorf("execution error: %v", err)
+			}
+			
+			// Display output directly
+			if result.Output != "" {
+				fmt.Print(result.Output)
+			}
+			
+			// Display errors to stderr
+			if result.Error != "" {
+				fmt.Fprint(cmd.ErrOrStderr(), result.Error)
+			}
+			
+			// Return error if command failed
+			if !result.Success {
+				return fmt.Errorf("command execution failed with exit code %d", result.ExitCode)
+			}
 			
 			return nil
 		},

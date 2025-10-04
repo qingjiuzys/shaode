@@ -25,6 +25,8 @@ in Shode projects. Uses shode.json for configuration.`,
 	cmd.AddCommand(newPkgListCommand())
 	cmd.AddCommand(newPkgRunCommand())
 	cmd.AddCommand(newPkgScriptCommand())
+	cmd.AddCommand(newPkgSearchCommand())
+	cmd.AddCommand(newPkgPublishCommand())
 
 	return cmd
 }
@@ -213,4 +215,75 @@ Without arguments, lists all scripts. With name and command, adds a new script.`
 	}
 
 	return cmd
+}
+
+// newPkgSearchCommand creates the 'search' subcommand
+func newPkgSearchCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "search [query]",
+		Short: "Search for packages in the registry",
+		Long:  `Search queries the Shode package registry for packages matching the search term.`,
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			query := args[0]
+			
+			pm := pkgmgr.NewPackageManager()
+			results, err := pm.Search(query)
+			if err != nil {
+				return fmt.Errorf("search failed: %v", err)
+			}
+
+			if len(results) == 0 {
+				fmt.Println("No packages found")
+				return nil
+			}
+
+			fmt.Printf("Found %d package(s):\n\n", len(results))
+			for i, result := range results {
+				fmt.Printf("%d. %s@%s\n", i+1, result.Name, result.Version)
+				fmt.Printf("   Description: %s\n", result.Description)
+				if result.Author != "" {
+					fmt.Printf("   Author: %s\n", result.Author)
+				}
+				if len(result.Keywords) > 0 {
+					fmt.Printf("   Keywords: %v\n", result.Keywords)
+				}
+				fmt.Printf("   Downloads: %d", result.Downloads)
+				if result.Verified {
+					fmt.Printf(" ✓ Verified")
+				}
+				fmt.Println()
+				fmt.Println()
+			}
+
+			return nil
+		},
+	}
+}
+
+// newPkgPublishCommand creates the 'publish' subcommand
+func newPkgPublishCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "publish",
+		Short: "Publish the package to the registry",
+		Long:  `Publish uploads the current package to the Shode package registry.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			pm := pkgmgr.NewPackageManager()
+			
+			// Load config to verify package is ready
+			if err := pm.LoadConfig(); err != nil {
+				return fmt.Errorf("failed to load package config: %v", err)
+			}
+
+			config := pm.GetConfig()
+			fmt.Printf("Publishing %s@%s to registry...\n", config.Name, config.Version)
+
+			if err := pm.Publish(); err != nil {
+				return fmt.Errorf("publish failed: %v", err)
+			}
+
+			fmt.Printf("✓ Successfully published %s@%s\n", config.Name, config.Version)
+			return nil
+		},
+	}
 }
